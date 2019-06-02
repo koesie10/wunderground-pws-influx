@@ -1,15 +1,12 @@
 package main
 
 import (
-	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
-	"reflect"
-	"strconv"
-	"strings"
 	"time"
 
 	influx "github.com/influxdata/influxdb/client/v2"
@@ -17,10 +14,8 @@ import (
 )
 
 const flagDateFormat = "2006-01-02"
-const dataDateFormat = "2006-01-02 15:04:05"
 
-var recordNames = []string{"Time", "TemperatureC", "DewpointC", "PressurehPa", "WindDirection", "WindDirectionDegrees", "WindSpeedKMH", "WindSpeedGustKMH", "Humidity", "HourlyPrecipMM", "Conditions", "Clouds", "dailyrainMM", "SolarRadiationWatts/m^2", "SoftwareType", "DateUTC"}
-
+// API in use: https://docs.google.com/document/d/1w8jbqfAk0tfZS5P7hYnar1JiitM0gQZB-clxDfG3aD0/edit
 func main() {
 	var upload = flag.Bool("upload", false, "pass to upload data to InfluxDB, otherwise the data will be output")
 	var influxAddr = flag.String("influx-addr", "http://localhost:8086", "InfluxDB HTTP address")
@@ -29,6 +24,7 @@ func main() {
 	var influxDB = flag.String("influx-db", "weather", "InfluxDB database")
 	var measurementName = flag.String("measurement-name", "weather", "measurement name")
 	var stationID = flag.StringP("station-id", "i", "", "Wunderground station ID")
+	var apiKey = flag.String("api-key", "", "Wunderground API key")
 	var startDateFlag = flag.StringP("start-date", "s", "", "start date (yyyy-mm-dd), default is yesterday")
 	var endDateFlag = flag.StringP("end-date", "e", "", "end date (yyyy-mm-dd), default is today")
 
@@ -68,16 +64,23 @@ func main() {
 		log.Fatal(err)
 	}
 
+	baseQuery := url.Values{
+		"stationId": []string{*stationID},
+		"apiKey":    []string{*apiKey},
+		"format":    []string{"json"},
+		"units":     []string{"m"},
+	}
+
 	baseURL := &url.URL{
 		Scheme: "https",
-		Host:   "www.wunderground.com",
-		Path:   "/weatherstation/WXDailyHistory.asp",
+		Host:   "api.weather.com",
+		Path:   "/v2/pws/history/all",
 	}
 
 	currentDate := startDate
 
 	for currentDate.Unix() <= endDate.Unix() {
-		pts, err := getPoints(*stationID, *measurementName, baseURL, &currentDate, httpC)
+		pts, err := getPoints(*measurementName, baseURL, baseQuery, &currentDate, httpC)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to get point for %s: %v\n", currentDate, err)
 		}
@@ -123,16 +126,9 @@ func main() {
 	}
 }
 
-func getPoints(stationID string, measurementName string, baseURL *url.URL, date *time.Time, client *http.Client) ([]*influx.Point, error) {
-	q := url.Values{
-		"ID":        []string{stationID},
-		"graphspan": []string{"day"},
-		"format":    []string{"0"},
-	}
-
-	q.Set("day", strconv.Itoa(date.Day()))
-	q.Set("month", strconv.Itoa(int(date.Month())))
-	q.Set("year", strconv.Itoa(date.Year()))
+func getPoints(measurementName string, baseURL *url.URL, baseQuery url.Values, date *time.Time, client *http.Client) ([]*influx.Point, error) {
+	q := baseQuery
+	q.Set("date", date.Format("20060102"))
 
 	u := baseURL.ResolveReference(&url.URL{
 		RawQuery: q.Encode(),
@@ -148,106 +144,78 @@ func getPoints(stationID string, measurementName string, baseURL *url.URL, date 
 		return nil, fmt.Errorf("failed to get %s: status code %d %s", u.String(), res.StatusCode, res.Status)
 	}
 
-	r := bufio.NewScanner(res.Body)
+	response := &APIResponse{}
+	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode API response: %v", err)
+	}
 
 	var points []*influx.Point
 
-	i := 0
-	for r.Scan() {
-		line := strings.TrimSpace(r.Text())
-		if line == "" || line == "<br>" {
-			continue
-		}
-
-		line = strings.TrimSuffix(line, "<br>")
-
-		records := strings.Split(line, ",")
-
-		if i == 0 {
-			if !reflect.DeepEqual(records, recordNames) {
-				return nil, fmt.Errorf("invalid first record in %s: got %#v, expected %#v", u.String(), records, recordNames)
-			}
-
-			i++
-			continue
-		}
-
-		if len(records) < 16 {
-			return nil, fmt.Errorf("invalid number of records in %s in record %d: %d", u.String(), i, len(records))
-		}
-
-		p, err := parseRecord(records, measurementName, map[string]string{
-			"station":  stationID,
+	for _, observation := range response.Observations {
+		p, err := observationToPoint(observation, measurementName, map[string]string{
+			"station":  observation.StationID,
 			"provider": "wunderground",
 		})
 		if err != nil {
-			return nil, fmt.Errorf("error while parsing record %d in %s: %v", i, u.String(), err)
+			return nil, fmt.Errorf("error while converting observation %+v: %v", observation, err)
 		}
 
 		points = append(points, p)
-
-		i++
 	}
 
 	return points, nil
 }
 
-func parseRecord(records []string, measurementName string, tags map[string]string) (*influx.Point, error) {
-	d, err := time.ParseInLocation(dataDateFormat, records[15], time.UTC)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse date %q: %v", records[15], err)
-	}
-
-	tags["software"] = records[14]
-
+func observationToPoint(observation *Observation, measurementName string, tags map[string]string) (*influx.Point, error) {
 	fields := make(map[string]interface{})
 
-	fields["temperature"], err = strconv.ParseFloat(records[1], 64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse temperature %q: %v", records[1], err)
-	}
+	// Legacy fields
+	fields["temperature"] = observation.Metric.TemperatureAverage
+	fields["dewpoint"] = observation.Metric.DewpointAverage
+	fields["pressure"] = (observation.Metric.PressureMaximum + observation.Metric.PressureMinimum) / 2.0
+	fields["wind_direction"] = observation.WindDirectionAverage
+	fields["wind_speed"] = observation.Metric.WindspeedAverage
+	fields["wind_speed_gust"] = observation.Metric.WindgustAverage
+	fields["humidity"] = observation.HumidityAverage
+	fields["solar_radiation"] = observation.SolarRadiationHigh
 
-	fields["dewpoint"], err = strconv.ParseFloat(records[2], 64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse dewpoint %q: %v", records[2], err)
-	}
+	fields["solar_radiation_high"] = observation.SolarRadiationHigh
+	fields["uv_high"] = observation.UVHigh
+	fields["wind_direction_average"] = observation.WindDirectionAverage
+	fields["humidity_high"] = observation.HumidityHigh
+	fields["humidity_low"] = observation.HumidityLow
+	fields["humidity_average"] = observation.HumidityAverage
 
-	fields["pressure"], err = strconv.ParseFloat(records[3], 64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse pressure %q: %v", records[3], err)
-	}
+	fields["temperature_high"] = observation.Metric.TemperatureHigh
+	fields["temperature_low"] = observation.Metric.TemperatureLow
+	fields["temperature_average"] = observation.Metric.TemperatureAverage
 
-	fields["wind_direction_name"] = records[4]
+	fields["wind_speed_high"] = observation.Metric.WindspeedHigh
+	fields["wind_speed_low"] = observation.Metric.WindspeedLow
+	fields["wind_speed_average"] = observation.Metric.WindspeedAverage
 
-	fields["wind_direction"], err = strconv.ParseFloat(records[5], 64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse wind direction %q: %v", records[5], err)
-	}
+	fields["wind_speed_gust_high"] = observation.Metric.WindgustHigh
+	fields["wind_speed_gust_low"] = observation.Metric.WindgustLow
+	fields["wind_speed_gust_average"] = observation.Metric.WindgustAverage
 
-	fields["wind_speed"], err = strconv.ParseFloat(records[6], 64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse wind speed %q: %v", records[6], err)
-	}
+	fields["dewpoint_high"] = observation.Metric.DewpointHigh
+	fields["dewpoint_low"] = observation.Metric.DewpointLow
+	fields["dewpoint_average"] = observation.Metric.DewpointAverage
 
-	fields["wind_speed_gust"], err = strconv.ParseFloat(records[7], 64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse wind speed gust %q: %v", records[7], err)
-	}
+	fields["windchill_high"] = observation.Metric.WindchillHigh
+	fields["windchill_low"] = observation.Metric.WindchillLow
+	fields["windchill_average"] = observation.Metric.WindchillAverage
 
-	fields["humidity"], err = strconv.ParseInt(records[8], 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse humidity %q: %v", records[8], err)
-	}
+	fields["heat_index_high"] = observation.Metric.HeatIndexHigh
+	fields["heat_index_low"] = observation.Metric.HeatIndexLow
+	fields["heat_index_average"] = observation.Metric.HeatIndexAverage
 
-	fields["hourly_precipitation"], err = strconv.ParseFloat(records[9], 64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse hourly precipitation mm %q: %v", records[9], err)
-	}
+	fields["pressure_maximum"] = observation.Metric.PressureMaximum
+	fields["pressure_minimum"] = observation.Metric.PressureMinimum
+	fields["pressure_trend"] = observation.Metric.PressureTrend
 
-	fields["solar_radiation"], err = strconv.ParseFloat(records[13], 64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse solar radiation %q: %v", records[13], err)
-	}
+	fields["precipitation_rate"] = observation.Metric.PrecipitationRate
+	fields["precipitation_total"] = observation.Metric.PrecipitationTotal
 
-	return influx.NewPoint(measurementName, tags, fields, d)
+	return influx.NewPoint(measurementName, tags, fields, observation.ObservationTimeUTC)
 }
