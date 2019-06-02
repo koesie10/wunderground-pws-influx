@@ -176,7 +176,7 @@ func observationToPoint(observation *Observation, measurementName string, tags m
 	fields["wind_direction"] = observation.WindDirectionAverage
 	fields["wind_speed"] = observation.Metric.WindspeedAverage
 	fields["wind_speed_gust"] = observation.Metric.WindgustAverage
-	fields["humidity"] = observation.HumidityAverage
+	fields["humidity"] = int64(observation.HumidityAverage)
 	fields["solar_radiation"] = observation.SolarRadiationHigh
 
 	fields["solar_radiation_high"] = observation.SolarRadiationHigh

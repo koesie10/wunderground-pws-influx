@@ -16,44 +16,43 @@ type Observation struct {
 	Longitude            float64           `json:"lon"`
 	SolarRadiationHigh   float64           `json:"solarRadiationHigh"`
 	UVHigh               float64           `json:"uvHigh"`
-	WindDirectionAverage int               `json:"winddirAvg"`
-	HumidityHigh         int               `json:"humidityHigh"`
-	HumidityLow          int               `json:"humidityLow"`
-	HumidityAverage      int               `json:"humidityAvg"`
+	WindDirectionAverage float64           `json:"winddirAvg"`
+	HumidityHigh         float64           `json:"humidityHigh"`
+	HumidityLow          float64           `json:"humidityLow"`
+	HumidityAverage      float64           `json:"humidityAvg"`
 	QCStatus             int               `json:"qcStatus"`
 	Metric               MetricObservation `json:"metric"`
 }
 
 type MetricObservation struct {
-	TemperatureHigh    int     `json:"tempHigh"`
-	TemperatureLow     int     `json:"tempLow"`
-	TemperatureAverage int     `json:"tempAvg"`
+	TemperatureHigh    float64 `json:"tempHigh"`
+	TemperatureLow     float64 `json:"tempLow"`
+	TemperatureAverage float64 `json:"tempAvg"`
 
-	WindspeedHigh      int     `json:"windspeedHigh"`
-	WindspeedLow       int     `json:"windspeedLow"`
-	WindspeedAverage   int     `json:"windspeedAvg"`
+	WindspeedHigh    float64 `json:"windspeedHigh"`
+	WindspeedLow     float64 `json:"windspeedLow"`
+	WindspeedAverage float64 `json:"windspeedAvg"`
 
-	WindgustHigh       int     `json:"windgustHigh"`
-	WindgustLow        int     `json:"windgustLow"`
-	WindgustAverage    int     `json:"windgustAvg"`
+	WindgustHigh    float64 `json:"windgustHigh"`
+	WindgustLow     float64 `json:"windgustLow"`
+	WindgustAverage float64 `json:"windgustAvg"`
 
-	DewpointHigh       int     `json:"dewptHigh"`
-	DewpointLow        int     `json:"dewptLow"`
-	DewpointAverage    int     `json:"dewptAvg"`
+	DewpointHigh    float64 `json:"dewptHigh"`
+	DewpointLow     float64 `json:"dewptLow"`
+	DewpointAverage float64 `json:"dewptAvg"`
 
-	WindchillHigh      int     `json:"windchillHigh"`
-	WindchillLow       int     `json:"windchillLow"`
-	WindchillAverage   int     `json:"windchillAvg"`
+	WindchillHigh    float64 `json:"windchillHigh"`
+	WindchillLow     float64 `json:"windchillLow"`
+	WindchillAverage float64 `json:"windchillAvg"`
 
-	HeatIndexHigh      int     `json:"heatindexHigh"`
-	HeatIndexLow       int     `json:"heatindexLow"`
-	HeatIndexAverage   int     `json:"heatindexAvg"`
+	HeatIndexHigh    float64 `json:"heatindexHigh"`
+	HeatIndexLow     float64 `json:"heatindexLow"`
+	HeatIndexAverage float64 `json:"heatindexAvg"`
 
-	PressureMaximum    float64 `json:"pressureMax"`
-	PressureMinimum    float64 `json:"pressureMin"`
-	PressureTrend      float64 `json:"pressureTrend"`
+	PressureMaximum float64 `json:"pressureMax"`
+	PressureMinimum float64 `json:"pressureMin"`
+	PressureTrend   float64 `json:"pressureTrend"`
 
 	PrecipitationRate  float64 `json:"precipRate"`
 	PrecipitationTotal float64 `json:"precipTotal"`
 }
-
